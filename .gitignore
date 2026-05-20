@@ -8,3 +8,6 @@ data/*
 !data/generate_graph_cath.py
 !data/sample_pdb/
 !data/source/
+cath/
+cath_download/
+

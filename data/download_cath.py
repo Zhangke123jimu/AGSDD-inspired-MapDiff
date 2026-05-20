@@ -16,10 +16,10 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     if args.cath_version == '4.2':
-        with open('source/chain_set_splits_cath_4_2.json', 'r') as f:
+        with open('data/source/chain_set_splits_cath_4_2.json', 'r') as f:
             data = json.load(f)
     elif args.cath_version == '4.3':
-        with open('source/chain_set_splits_cath_4_3.json', 'r') as f:
+        with open('data/source/chain_set_splits_cath_4_3.json', 'r') as f:
             data = json.load(f)
     else:
         raise ValueError("Invalid CATH version")
@@ -32,14 +32,23 @@ if __name__ == '__main__':
         os.mkdir('cath_download/validation')
 
     exits_file = os.listdir('cath_download/all/')
-    for key in data.keys():
-        for pdb_code in data[key]:
-            pdb_code = pdb_code[:4]
-            if pdb_code + '.pdb' in exits_file:
-                print(pdb_code, 'exist')
-            else:
-                get_pdb(pdb_code)
-                print(pdb_code)
+
+    # improved for batch-downloading
+    missing_codes = sorted(set(
+        pdb_code[:4]
+        for key in data.keys()
+        for pdb_code in data[key]
+        if key != "cath_nodes"
+           and not os.path.exists(f"cath_download/all/{pdb_code[:4]}.pdb")
+    ))
+
+    url_file = "cath_download/pdb_urls.txt"
+    with open(url_file, "w") as f:
+        for pdb_code in missing_codes:
+            f.write(f"https://files.rcsb.org/view/{pdb_code}.pdb\n")
+
+    if missing_codes:
+        os.system(f"wget -nv -nc -P cath_download/all -i cath_download/pdb_urls.txt")
 
     err_file = []
     all_processed_file = os.listdir('cath_download/test/') + os.listdir('cath_download/train/') + os.listdir(

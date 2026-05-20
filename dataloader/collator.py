@@ -90,7 +90,7 @@ class CollatorIPAPretrain(object):
                 new_labels[is_equal] = np.random.randint(0, 20, size=np.sum(is_equal))
                 is_equal = (curr_labels == new_labels)
             # transform new_labels into one-hot
-            new_replace_x = F.one_hot(torch.tensor(new_labels), num_classes=20)
+            new_replace_x = F.one_hot(torch.tensor(new_labels,dtype=torch.long), num_classes=20)
             new_replace_x = new_replace_x.float()
             batch_x[i, replace_ids] = new_replace_x
 
