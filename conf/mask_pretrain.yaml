@@ -18,7 +18,7 @@ dataset:
 
 train:
   train_epochs: 200
-  batch_size: 1
+  batch_size: 8
 
 comet:
   use: True

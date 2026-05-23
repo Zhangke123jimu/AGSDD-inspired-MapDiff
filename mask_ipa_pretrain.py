@@ -49,10 +49,15 @@ def main(cfg: DictConfig):
     collator = CollatorIPAPretrain(candi_rate=cfg.train.candi_rate, mask_rate=cfg.train.mask_rate,
                                    replace_rate=cfg.train.replace_rate, keep_rate=cfg.train.keep_rate)
 
-    train_loader = DataLoader(train_dataset, batch_size=cfg.train.batch_size, shuffle=True, num_workers=6,
+    train_loader = DataLoader(train_dataset, batch_size=cfg.train.batch_size, shuffle=True, num_workers=24,
                               collate_fn=collator)
 
     model = IPANetPredictor(dropout=cfg.model.ipa_drop_out).to(device)
+
+    if torch.cuda.device_count() > 1:
+        print(f"Use {torch.cuda.device_count()} GPUs with DataParallel")
+        model = torch.nn.DataParallel(model)
+
     print(f"Total parameters: {count_parameters(model)}")
 
     steps_per_epoch = len(train_loader)
@@ -71,6 +76,7 @@ def main(cfg: DictConfig):
     trainer.fit()
     print(f"Output directory: {output_dir}")
 
+    os.system("auto_save_shutdown.sh")
 
 if __name__ == "__main__":
     main()

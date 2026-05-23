@@ -27,6 +27,9 @@ class Trainer(object):
         self.save_epochs = save_epochs
         Path(self.output_dir + '/model/').mkdir(exist_ok=True)
 
+    def unwrap_model(model):
+        return model.module if hasattr(model, "module") else model
+
     def train_epoch(self):
         self.model.train()
         self.current_epoch += 1
@@ -68,14 +71,14 @@ class Trainer(object):
             data = {
                 'config': config_dict,
                 'epoch': save_epochs,
-                'model': self.model.state_dict(),
+                'model': unwrap_model(self.model).state_dict(),
                 'opt': self.optimizer.state_dict(),
             }
         elif mode == 'curr':
             data = {
                 'config': config_dict,
                 'epoch': save_epochs,
-                'model': self.model.state_dict(),
+                'model': unwrap_model(self.model).state_dict(),
                 'opt': self.optimizer.state_dict(),
             }
         else:
