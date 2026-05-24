@@ -11,7 +11,7 @@ from tqdm import tqdm
 
 class Trainer(object):
     def __init__(self, config, model, optimizer, epochs, loss_fn, train_dataloader, output_dir, device,
-                 scheduler=None, experiment=None, save_epochs=10, resume_path=None,distributed=False,is_main_process=True,train_sampler=None,):
+                 scheduler=None, experiment=None, save_epochs=5, resume_path=None,distributed=False,is_main_process=True,train_sampler=None,):
         self.model = model
         self.config = config
         self.optimizer = optimizer

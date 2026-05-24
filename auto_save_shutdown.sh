@@ -3,7 +3,7 @@ set -e
 
 cd /hy-tmp/Mapdiff-repo
 # 压缩包名称
-file="outputs-$(date "+%Y%m%d-%H%M").zip"
+file="outputs-$(TZ=Asia/Shanghai date "+%Y%m%d-%H%M").zip"
 # 把 output 目录做成 zip 压缩包
 zip -q -r "${file}" outputs
 
