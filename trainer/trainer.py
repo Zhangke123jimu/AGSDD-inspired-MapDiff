@@ -10,7 +10,11 @@ from pathlib import Path
 from omegaconf import OmegaConf
 from prettytable import PrettyTable
 from evaluator import Evaluator
+import torch.distributed as dist
 
+
+def unwrap_model(model):
+    return model.module if hasattr(model, "module") else model
 
 class Trainer(object):
     def __init__(
@@ -31,7 +35,11 @@ class Trainer(object):
             ensemble_num=50,
             ddim_steps=50,
             sample_method='ddim',
-            experiment=None
+            experiment=None,
+            distributed=False,
+            is_main_process=True,
+            train_sampler=None,
+            resume_path=None
     ):
         super().__init__()
         self.device = device
@@ -76,6 +84,27 @@ class Trainer(object):
         Path(self.results_folder + '/model/').mkdir(exist_ok=True)
         self.experiment = experiment
 
+        self.distributed = distributed
+        self.is_main_process = is_main_process
+        self.train_sampler = train_sampler
+        self.rank=dist.get_rank() if self.distributed else 0
+        self.world_size=dist.get_world_size() if self.distributed else 1
+
+        if resume_path is not None:
+            try:
+                resume_checkpoint = torch.load(resume_path, map_location=device)
+                self.best_val_step=resume_checkpoint['best_val_step']
+                self.best_val_epoch=resume_checkpoint['best_val_epoch']
+                self.best_val_recovery=resume_checkpoint['best_val_recovery']
+                self.best_val_perplexity=resume_checkpoint['best_val_perplexity']
+                self.epoch=resume_checkpoint['current_epoch']
+                self.step=resume_checkpoint['current_step']
+                if resume_checkpoint['best_model'] is not None:
+                    self.best_model= copy.deepcopy(unwrap_model(self.model))
+                    self.best_model.load_state_dict(resume_checkpoint['best_model'])
+            except:
+                raise RuntimeError(f"Fail to resume checkpoint {resume_path}.")
+
     def save(self, save_epochs, save_steps, mode='best'):
         config_dict = OmegaConf.to_container(self.config, resolve=True)
         if mode == 'best':
@@ -83,16 +112,32 @@ class Trainer(object):
                 'config': config_dict,
                 'step': save_steps,
                 'epoch': save_epochs,
-                'model': self.best_model.state_dict(),
+                'model': unwrap_model(self.best_model).state_dict(),
+                'best_model':unwrap_model(self.best_model).state_dict() if self.best_model is not None else None,
                 'opt': self.optimizer.state_dict(),
+                'scheduler': self.scheduler.state_dict() if self.scheduler is not None else None,
+                'current_epoch': self.epoch,
+                'current_step': self.step,
+                'best_val_step': self.best_val_step,
+                'best_val_epoch': self.best_val_epoch,
+                'best_val_recovery':self.best_val_recovery,
+                'best_val_perplexity':self.best_val_perplexity,
             }
         elif mode == 'last':
             data = {
                 'config': config_dict,
                 'step': save_steps,
                 'epoch': save_epochs,
-                'model': self.model.state_dict(),
+                'model': unwrap_model(self.model).state_dict(),
+                'best_model': unwrap_model(self.best_model).state_dict() if self.best_model is not None else None,
                 'opt': self.optimizer.state_dict(),
+                'scheduler': self.scheduler.state_dict() if self.scheduler is not None else None,
+                'current_epoch': self.epoch,
+                'current_step': self.step,
+                'best_val_step': self.best_val_step,
+                'best_val_epoch': self.best_val_epoch,
+                'best_val_recovery': self.best_val_recovery,
+                'best_val_perplexity': self.best_val_perplexity,
             }
         else:
             raise ValueError(f"unknown mode {mode}")
@@ -110,9 +155,12 @@ class Trainer(object):
 
     def train(self):
         epoch_total_loss = 0
-        with tqdm(initial=self.step, total=self.train_num_steps) as pbar:
+        with tqdm(initial=self.step, total=self.train_num_steps, disable=not self.is_main_process) as pbar:
 
-            while self.step < self.train_num_steps:
+            while self.epoch < self.config.train.train_epochs:
+                if self.train_sampler is not None:
+                    self.train_sampler.set_epoch(self.epoch)
+
                 self.model.train()
                 g_batch, ipa_batch = next(self.train_iterator)
                 g_batch, ipa_batch = g_batch.to(self.device), ipa_batch.to(self.device) if ipa_batch is not None else None
@@ -127,36 +175,65 @@ class Trainer(object):
                 self.optimizer.zero_grad()
 
                 self.step += 1
-                epoch_total_loss += loss.item()
 
-                if self.experiment:
-                    self.experiment.log_metric('train_base_loss', base_loss.item(), step=self.step, epoch=self.epoch)
-                    self.experiment.log_metric('train_mask_loss', mask_loss.item(), step=self.step, epoch=self.epoch)
-                    self.experiment.log_metric('train_loss', loss.item(), step=self.step, epoch=self.epoch)
+                if self.distributed:
+                    base_loss_comb=base_loss.detach().clone()
+                    dist.all_reduce(base_loss_comb,op=dist.ReduceOp.SUM)
+                    base_loss_comb=base_loss_comb/self.world_size
+
+                    mask_loss_comb=mask_loss.detach().clone()
+                    dist.all_reduce(mask_loss_comb,op=dist.ReduceOp.SUM)
+                    mask_loss_comb=mask_loss_comb/self.world_size
+
+                    loss_comb = base_loss_comb + mask_loss_comb
+                else:
+                    base_loss_comb = base_loss
+                    mask_loss_comb = mask_loss
+                    loss_comb = loss
+
+                epoch_total_loss += loss_comb.item()
+
+                if self.experiment and self.is_main_process:
+                    self.experiment.log_metric('train_base_loss', base_loss_comb.item(), step=self.step, epoch=self.epoch)
+                    self.experiment.log_metric('train_mask_loss', mask_loss_comb.item(), step=self.step, epoch=self.epoch)
+                    self.experiment.log_metric('train_loss', loss_comb.item(), step=self.step, epoch=self.epoch)
 
                 if self.step % self.iter_one_epoch == 0 and self.step != 0:
                     self.epoch += 1
-                    self.train_table.add_row([self.epoch, self.step, epoch_total_loss / self.iter_one_epoch])
+
+                    if self.is_main_process:
+                        self.train_table.add_row([self.epoch, self.step, epoch_total_loss / self.iter_one_epoch])
                     epoch_total_loss = 0
                     torch.cuda.empty_cache()
 
                 if self.step != 0 and self.step % (self.save_and_sample_every * self.iter_one_epoch) == 0:
+                    if self.distributed:
+                        dist.barrier()
+
                     self.model.eval()
                     enable_dropout(self.model)
                     with torch.no_grad():
                         all_logits = torch.tensor([])
                         all_seq = torch.tensor([])
                         recovery = []
-                        for g_batch, ipa_batch in tqdm(self.val_dataloader):
+                        for g_batch, ipa_batch in tqdm(self.val_dataloader,disable=not self.is_main_process):
                             g_batch, ipa_batch = g_batch.to(self.device), ipa_batch.to(self.device) if ipa_batch is not None else None
-                            ens_logits = []
+                            ens_logits = torch.zeros(len(g_batch.x),20,device=self.device)
                             if self.sample_method == 'ddim':
-                                for _ in range(self.ensemble_num):
-                                    logits, sample_graph = self.model.mc_ddim_sample(g_batch, ipa_batch, diverse=True,
-                                                                                  step=self.ddim_steps)
-                                    ens_logits.append(logits)
-                            ens_logits_tensor = torch.stack(ens_logits)
-                            batch_logits = ens_logits_tensor.mean(dim=0).cpu()
+                                for _ in range(self.rank,self.ensemble_num,self.world_size):
+                                    logits, sample_graph = unwrap_model(self.model).mc_ddim_sample(g_batch, ipa_batch, diverse=True,
+                                                                                                        step=self.ddim_steps)
+                                    ens_logits+=logits
+                            if self.distributed:
+                                ens_logits_comb =ens_logits.detach().clone()
+                                dist.all_reduce(ens_logits_comb, op=dist.ReduceOp.SUM)
+                            else:
+                                ens_logits_comb = ens_logits.detach().clone()
+
+                            ens_logits_comb = ens_logits_comb/self.ensemble_num
+                            batch_logits = ens_logits_comb.cpu()
+
+
                             all_logits = torch.cat([all_logits, batch_logits])
                             all_seq = torch.cat([all_seq, g_batch.x.cpu()])
 
@@ -175,49 +252,71 @@ class Trainer(object):
                         full_recovery = full_recovery.item()
 
                         perplexity = self.evaluator.cal_perplexity(all_logits, all_seq)
-                        print()
-                        print(f'Val median recovery rate (step: {self.step}) is {median_recovery}')
-                        print(f'Val perplexity (step: {self.step}): {perplexity}')
-                        self.val_table.add_row([self.epoch, self.step, median_recovery, perplexity])
-                        if self.experiment:
-                            self.experiment.log_metric('val_full_recovery', full_recovery, epoch=self.epoch)
-                            self.experiment.log_metric('val_perplexity', perplexity, epoch=self.epoch)
-                            self.experiment.log_metric('val_median_recovery', median_recovery, epoch=self.epoch)
-                            self.experiment.log_metric('val_mean_recovery', mean_recovery, epoch=self.epoch)
+                        if self.is_main_process:
+                            print()
+                            print(f'Val median recovery rate (step: {self.step}) is {median_recovery}')
+                            print(f'Val perplexity (step: {self.step}): {perplexity}')
+                            self.val_table.add_row([self.epoch, self.step, median_recovery, perplexity])
+                            if self.experiment:
+                                self.experiment.log_metric('val_full_recovery', full_recovery, epoch=self.epoch)
+                                self.experiment.log_metric('val_perplexity', perplexity, epoch=self.epoch)
+                                self.experiment.log_metric('val_median_recovery', median_recovery, epoch=self.epoch)
+                                self.experiment.log_metric('val_mean_recovery', mean_recovery, epoch=self.epoch)
 
                         if median_recovery > self.best_val_recovery:
-                            self.best_model = copy.deepcopy(self.model)
+                            self.best_model = copy.deepcopy(unwrap_model(self.model))
                             self.best_val_step = self.step
                             self.best_val_epoch = self.epoch
                             self.best_val_recovery = median_recovery
                             self.best_val_perplexity = perplexity
+
+                    if self.distributed:
+                        dist.barrier()
+
                 pbar.update(1)
-        print('Training complete')
-        if self.experiment:
-            self.experiment.log_metric('best_val_median_recovery', self.best_val_recovery)
-            self.experiment.log_metric('best_val_perplexity', self.best_val_perplexity)
-            self.experiment.log_metric('best_val_epoch', self.best_val_epoch)
-        self.save(self.best_val_epoch, self.best_val_step, mode='best')
-        self.save(self.epoch, self.train_num_steps, mode='last')
+
+        if self.best_model is None:
+            if self.is_main_process:
+                print('Best model not found yet, current model is set to best model')
+            self.best_model=copy.deepcopy(unwrap_model(self.model))
+            self.best_val_step=self.step
+            self.best_val_epoch=self.epoch
+
+        if self.is_main_process:
+            print('Training complete')
+            if self.experiment:
+                self.experiment.log_metric('best_val_median_recovery', self.best_val_recovery)
+                self.experiment.log_metric('best_val_perplexity', self.best_val_perplexity)
+                self.experiment.log_metric('best_val_epoch', self.best_val_epoch)
+            self.save(self.best_val_epoch, self.best_val_step, mode='best')
+            self.save(self.epoch, self.train_num_steps, mode='last')
 
     def test(self):
         self.best_model.eval()
         enable_dropout(self.best_model)
-        with torch.no_grad():
-            print('Testing best model')
+        with (torch.no_grad()):
+            if self.is_main_process:
+                print('Testing best model')
             all_logits = torch.tensor([])
             all_seq = torch.tensor([])
             recovery = []
             nssr42, nssr62, nssr80, nssr90 = [], [], [], []
             for g_batch, ipa_batch in self.test_dataloader:
                 g_batch, ipa_batch = g_batch.to(self.device), ipa_batch.to(self.device) if ipa_batch is not None else None
-                ens_logits = []
+                ens_logits = torch.zeros(len(g_batch.x),20,device=self.device)
                 if self.sample_method == 'ddim':
-                    for _ in range(self.ensemble_num):
+                    for _ in range(self.rank,self.ensemble_num,self.world_size):
                         logits, sample_graph = self.best_model.mc_ddim_sample(g_batch, ipa_batch, diverse=True, step=self.ddim_steps)
-                        ens_logits.append(logits)
-                ens_logits_tensor = torch.stack(ens_logits)
-                batch_logits = ens_logits_tensor.mean(dim=0).cpu()
+                        ens_logits+=logits
+                if self.distributed:
+                    ens_logits_comb = ens_logits.detach().clone()
+                    dist.all_reduce(ens_logits_comb, op=dist.ReduceOp.SUM)
+                else:
+                    ens_logits_comb = ens_logits.detach().clone()
+
+                ens_logits_comb = ens_logits_comb / self.ensemble_num
+                batch_logits = ens_logits_comb.cpu()
+
                 all_logits = torch.cat([all_logits, batch_logits])
                 all_seq = torch.cat([all_seq, g_batch.x.cpu()])
 
@@ -243,10 +342,11 @@ class Trainer(object):
             test_recovery = (all_logits.argmax(dim=1) == all_seq.argmax(dim=1)).sum() / all_seq.shape[0]
             test_recovery = test_recovery.item()
             test_perplexity = self.evaluator.cal_perplexity(all_logits, all_seq)
-            print(f'test median recovery rate with best model (step: {self.best_val_step}) is {test_median_recovery}')
-            print(f'test perplexity with the best model (step: {self.best_val_step}) is: {test_perplexity}')
-            self.test_table.add_row([self.best_val_epoch, self.best_val_step, test_median_recovery, test_perplexity])
-            if self.experiment:
+            if self.is_main_process:
+                print(f'test median recovery rate with best model (step: {self.best_val_step}) is {test_median_recovery}')
+                print(f'test perplexity with the best model (step: {self.best_val_step}) is: {test_perplexity}')
+                self.test_table.add_row([self.best_val_epoch, self.best_val_step, test_median_recovery, test_perplexity])
+            if self.experiment and self.is_main_process:
                 self.experiment.log_metric('test_full_recovery_with_best_model', test_recovery)
                 self.experiment.log_metric('test_perplexity_with_best_model', test_perplexity)
                 self.experiment.log_metric('test_median_recovery_with_best_model', test_median_recovery)
