@@ -132,7 +132,7 @@ def main(cfg: DictConfig):
             raise RuntimeError(f'Fail to load resume checkpoint {cfg.resume_path}')
 
     if distributed:
-        diffusion_model=DDP(diffusion_model, device_ids=[local_rank],output_device=local_rank)
+        diffusion_model=DDP(diffusion_model, device_ids=[local_rank],output_device=local_rank,find_unused_parameters=True)
 
     optimizer = Adam(diffusion_model.parameters(), lr=cfg.train.lr, betas=(0.95, 0.999),
                      weight_decay=cfg.train.weight_decay)
@@ -157,6 +157,7 @@ def main(cfg: DictConfig):
                       scheduler=scheduler,
                       train_num_steps=train_num_steps,
                       save_and_sample_every=cfg.train.save_and_sample_every,
+                      save_checkpoint_every=cfg.train.save_checkpoint_every,
                       train_batch_size=cfg.train.batch_size,
                       ddim_steps=cfg.diffusion.ddim_steps,
                       sample_method=cfg.diffusion.sample_method,

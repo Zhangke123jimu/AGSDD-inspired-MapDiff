@@ -31,6 +31,7 @@ class Trainer(object):
             train_batch_size=512,
             train_num_steps=200000,
             save_and_sample_every=100,
+            save_checkpoint_every=3,
             num_samples=25,
             ensemble_num=50,
             ddim_steps=50,
@@ -49,6 +50,8 @@ class Trainer(object):
         self.ensemble_num = ensemble_num
         self.ddim_steps = ddim_steps
         self.save_and_sample_every = save_and_sample_every
+        self.save_checkpoint_every = save_checkpoint_every
+
 
         self.batch_size = train_batch_size
 
@@ -143,7 +146,7 @@ class Trainer(object):
             raise ValueError(f"unknown mode {mode}")
         save_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         torch.save(data, os.path.join(self.results_folder, 'model',
-                                      f'{self.config.experiment.name}_{mode}_{save_epochs}_epochs_{save_steps}_steps_{save_time}.pt'))
+                                      f'{self.config.experiment.name}_{mode}_{self.epoch}_epochs_{self.step}_steps_{save_time}.pt'))
 
     def save_table_results(self):
         with open(os.path.join(self.results_folder, 'train_markdowntable.txt'), 'w') as f:
@@ -203,6 +206,10 @@ class Trainer(object):
 
                     if self.is_main_process:
                         self.train_table.add_row([self.epoch, self.step, epoch_total_loss / self.iter_one_epoch])
+
+                    if self.epoch != 0 and self.epoch % self.save_checkpoint_every == 0 and self.is_main_process:
+                        self.save(self.epoch, self.train_num_steps, mode="last")
+
                     epoch_total_loss = 0
                     torch.cuda.empty_cache()
 

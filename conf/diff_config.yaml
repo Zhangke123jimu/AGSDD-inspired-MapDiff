@@ -26,5 +26,6 @@ train:
   save_and_sample_every: 50
   train_epochs: 100
   batch_size: 1
+  save_checkpoint_every: 3
 
 resume_path: null
