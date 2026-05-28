@@ -9,6 +9,7 @@ import torch
 import sys
 import math
 import numpy as np
+from numpy import pi
 from torch_geometric.data import (
     Data,
     Dataset,
@@ -397,35 +398,74 @@ class Cath_imem(InMemoryDataset):
     def get_node_features(self, n_coords, c_coords, c_alpha_coords, coord_mask, with_coord_mask=True, use_angle=False,
                           use_omega=False):
         num_res = n_coords.shape[0]
+        assert len(c_coords) == len(n_coords)
+
+        # checking topologically bonded by distance, which is referred to BioPython, using 1.8Å as the threshold
+        bond = np.linalg.norm(c_coords[:-1] - n_coords[1:], axis=1) < 1.8
+
         if use_omega:
             num_angle_type = 3
             angles = np.zeros((num_res, num_angle_type))
-            for i in range(num_res - 1):
-                # These angles are called φ (phi) which involves the backbone atoms C-N-Cα-C
-                angles[i, 0] = dihedral(
-                    c_coords[i], n_coords[i], c_alpha_coords[i], n_coords[i + 1])
-                # psi involves the backbone atoms N-Cα-C-N.
-                angles[i, 1] = dihedral(
-                    n_coords[i], c_alpha_coords[i], c_coords[i], n_coords[i + 1])
-                angles[i, 2] = dihedral(
-                    c_alpha_coords[i], c_coords[i], n_coords[i + 1], c_alpha_coords[i + 1])
+            for i in range(num_res):
+                if i != 0:
+                    if bond[i-1]:
+                        # These angles are called φ (phi) which involves the backbone atoms C-N-Cα-C
+                        angles[i, 0] = dihedral(
+                            c_coords[i-1], n_coords[i], c_alpha_coords[i], c_coords[i])
+                    else:
+                        angles[i, 0] = np.nan
+                else:
+                    angles[i, 0] = np.nan
+
+                if i < num_res-1:
+                    if bond[i]:
+                        # psi involves the backbone atoms N-Cα-C-N.
+                        angles[i, 1] = dihedral(
+                            n_coords[i], c_alpha_coords[i], c_coords[i], n_coords[i + 1])
+                        angles[i, 2] = dihedral(
+                            c_alpha_coords[i], c_coords[i], n_coords[i + 1], c_alpha_coords[i + 1])
+                    else:
+                        angles[i, 1] = np.nan
+                        angles[i, 2] = np.nan
+                else:
+                    angles[i, 1] = np.nan
+                    angles[i, 2] = np.nan
+
         else:
             num_angle_type = 2
             angles = np.zeros((num_res, num_angle_type))
-            for i in range(num_res - 1):
-                # These angles are called φ (phi) which involves the backbone atoms C-N-Cα-C
-                angles[i, 0] = dihedral(
-                    c_coords[i], n_coords[i], c_alpha_coords[i], n_coords[i + 1])
-                # psi involves the backbone atoms N-Cα-C-N.
-                angles[i, 1] = dihedral(
-                    n_coords[i], c_alpha_coords[i], c_coords[i], n_coords[i + 1])
+            for i in range(num_res):
+                if i != 0:
+                    if bond[i-1]:
+                        # These angles are called φ (phi) which involves the backbone atoms C_i-1-N-Cα-C
+                        angles[i, 0] = dihedral(
+                            c_coords[i-1], n_coords[i], c_alpha_coords[i], c_coords[i])
+                    else:
+                        angles[i, 0] = np.nan
+                else:
+                    angles[i, 0] = np.nan
+
+                if i<num_res-1:
+                    if bond[i]:
+                        # psi involves the backbone atoms N-Cα-C-N.
+                        angles[i, 1] = dihedral(
+                            n_coords[i], c_alpha_coords[i], c_coords[i], n_coords[i + 1])
+                    else:
+                        angles[i, 1] = np.nan
+                else:
+                    angles[i, 1] = np.nan
+
+        # not recommended
         if use_angle:
-            node_scalar_features = angles
+            node_scalar_features = np.nan_to_num(angles,nan=0.0)
+
         else:
             node_scalar_features = np.zeros((num_res, num_angle_type * 2))
             for i in range(num_angle_type):
-                node_scalar_features[:, 2 * i] = np.sin(angles[:, i])
-                node_scalar_features[:, 2 * i + 1] = np.cos(angles[:, i])
+                rad=angles[:,i] * pi / 180
+                # Angles should be measured in radian in np.sin and np.cos
+                node_scalar_features[:, 2 * i] = np.nan_to_num(np.sin(rad), nan=0.0)
+                node_scalar_features[:, 2 * i + 1] = np.nan_to_num(np.cos(rad), nan=0.0)
 
         if with_coord_mask:
             node_scalar_features = torch.cat([
