@@ -122,7 +122,7 @@ def main(cfg: DictConfig):
 
     if is_main_process:
         print(f"Output directory: {output_dir}")
-        os.system("auto_save_shutdown.sh")
+        os.system("bash auto_save_shutdown.sh")
 
 if __name__ == "__main__":
     main()
