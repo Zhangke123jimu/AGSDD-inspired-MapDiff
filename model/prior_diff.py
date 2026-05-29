@@ -9,7 +9,7 @@ from model.diffusion import DiscreteUniformTransition, BlosumTransition, Discret
 class Prior_Diff(nn.Module):
     def __init__(self, model, prior_model, timesteps=500, loss_type='CE', objective='pred_x0', noise_type='marginal',
                  sample_method='ddim', min_mask_ratio=0.4, dev_mask_ratio=0.1, ensemble_num=50,
-                 marginal_dist_path='data/train_magrinal_x.pt'):
+                 marginal_dist_path='data/train_magrinal_x.pt',semantic_use=False):
         super().__init__()
         self.model = model
         self.prior_model = prior_model
@@ -21,6 +21,7 @@ class Prior_Diff(nn.Module):
         self.min_mask_ratio = min_mask_ratio
         self.dev_mask_ratio = dev_mask_ratio
         self.ensemble_num = ensemble_num
+        self.semantic_use = semantic_use
         if noise_type == 'uniform':
             self.transition_model = DiscreteUniformTransition(x_classes=20)
         elif noise_type == 'blosum':
@@ -87,7 +88,10 @@ class Prior_Diff(nn.Module):
         noise_data = data.clone()
         noise_data.x = noise_X  # x_t
         t = t_int * torch.ones(size=(data.batch[-1] + 1, 1), device=data.x.device).float()
-        pred = self.model(noise_data, t)
+        if self.semantic_use:
+            pred,_ = self.model(noise_data, t)
+        else:
+            pred = self.model(noise_data, t)
         pred_X = F.softmax(pred, dim=-1)  # \hat{p(X)}_0
         p_s_and_t_given_0_X = self.compute_batched_over0_posterior_distribution(X_t=noise_X, Q_t=Qt, Qsb=Qsb, Qtb=Qtb,
                                                                                 data=data)  # [N,d0,d_t-1] 20,20
@@ -181,7 +185,10 @@ class Prior_Diff(nn.Module):
         noise_data.x = zt
 
         ipa_noise_data = ipa_data.clone()
-        base_logits = self.model(noise_data, t * self.timesteps)
+        if self.model.semantic_use:
+            base_logits, _ = self.model(noise_data, t * self.timesteps)
+        else:
+            base_logits = self.model(noise_data, t * self.timesteps)
         log_probs = F.log_softmax(base_logits, dim=-1)
         base_pred_x = log_probs.argmax(dim=-1)
         base_pred_x = F.one_hot(base_pred_x, num_classes=20).float()
@@ -198,7 +205,11 @@ class Prior_Diff(nn.Module):
         ipa_noise_data.x_mask[ipa_noise_data.x_pad == 1] = mask_entropy.long()
         ipa_noise_data.x[ipa_noise_data.x_pad == 1] = base_pred_x
 
-        prior_logits = self.prior_model(ipa_noise_data.x, ipa_noise_data.atom_pos, ipa_noise_data.x_mask,
+        if self.prior_model.semantic_use:
+            prior_logits,_ = self.prior_model(ipa_noise_data.x, ipa_noise_data.atom_pos, ipa_noise_data.x_mask,
+                                        ipa_noise_data.x_pad)
+        else:
+            prior_logits = self.prior_model(ipa_noise_data.x, ipa_noise_data.atom_pos, ipa_noise_data.x_mask,
                                         ipa_noise_data.x_pad)
         prior_log_probs = F.log_softmax(prior_logits, dim=-1)
 
@@ -258,7 +269,10 @@ class Prior_Diff(nn.Module):
         else:
             raise ValueError(f'unknown objective {self.objective}')
 
-        base_logits = self.model(noise_data, t_int)
+        if self.semantic_use:
+            base_logits,semantic_logits_e = self.model(noise_data, t_int)
+        else:
+            base_logits = self.model(noise_data, t_int)
         log_probs = F.log_softmax(base_logits, dim=-1)
         base_pred_x = log_probs.argmax(dim=-1)
         # one-hot encoding base_pred_x
@@ -275,8 +289,17 @@ class Prior_Diff(nn.Module):
         ipa_data.x_mask[ipa_data.x_pad == 1] = mask_entropy.long()
         ipa_data.x[ipa_data.x_pad == 1] = base_pred_x
 
-        prior_logits = self.prior_model(ipa_data.x, ipa_data.atom_pos, ipa_data.x_mask, ipa_data.x_pad)
+        if self.semantic_use:
+            prior_logits,semantic_logits_i = self.prior_model(ipa_data.x, ipa_data.atom_pos, ipa_data.x_mask, ipa_data.x_pad)
+        else:
+            prior_logits = self.prior_model(ipa_data.x, ipa_data.atom_pos, ipa_data.x_mask, ipa_data.x_pad)
         base_loss = self.loss_fn(base_logits, target, reduction='mean')
         mask_loss = self.loss_fn(prior_logits[ipa_data.x_mask == 1], ipa_data.label[ipa_data.x_mask == 1], reduction='mean')
 
-        return base_loss, mask_loss
+        if self.semantic_use:
+            semantic_loss_e=self.loss_fn(semantic_logits_e, target, reduction='mean')
+            semantic_loss_i=self.loss_fn(semantic_logits_i[ipa_data.x_mask==1], ipa_data.label[ipa_data.x_mask == 1], reduction='mean')
+            semantic_loss = semantic_loss_e + semantic_loss_i
+            return base_loss, mask_loss, semantic_loss
+        else:
+            return base_loss, mask_loss

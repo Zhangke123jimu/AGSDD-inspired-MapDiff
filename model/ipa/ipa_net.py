@@ -6,6 +6,7 @@ from model.ipa.rigid_utils import Rigid
 from model.ipa.ipa_utils import cal_dihedrals, cal_pair_rbf, relative_pairwise_position_idx, LayerNorm
 from model.ipa.ipa_attn import InvariantPointAttention, StructureModuleTransition, EdgeTransition
 from einops import rearrange
+from model.semantic_module import Semantic
 
 
 class NodeMaskEncoder(nn.Module):
@@ -110,7 +111,7 @@ class IPANetModel(nn.Module):
 
 class IPANetPredictor(nn.Module):
     def __init__(self, dropout=0.1, hidden_dim=128, ipa_dim=128, ipa_pairwise_dim=128, ipa_heads=4, ipa_depth=6,
-                 ipa_qk_points=4, ipa_v_points=8):
+                 ipa_qk_points=4, ipa_v_points=8,semantic_use=False):
         super(IPANetPredictor, self).__init__()
         self.node_encoder = NodeMaskEncoder(hidden_dim)
         self.edge_pair_encoder = EdgePairEncoder(hidden_dim)
@@ -119,6 +120,9 @@ class IPANetPredictor(nn.Module):
         self.node_predictor = nn.Linear(hidden_dim, 20)
 
         self.ipa = IPANetModel(ipa_dim, ipa_pairwise_dim, ipa_heads, ipa_depth, ipa_qk_points, ipa_v_points, dropout)
+        self.semantic_use = semantic_use
+        if self.semantic_use:
+            self.semantic_layer = Semantic(hidden_dim)
 
     def forward(self, x_aa, x_pos, x_aa_mask, seq_mask):
         r = Rigid.from_3_points(x_pos[:, :, 0], x_pos[:, :, 1], x_pos[:, :, 2])
@@ -129,6 +133,12 @@ class IPANetPredictor(nn.Module):
         seq_mask = seq_mask.long()
 
         s = self.ipa(s, z, r, seq_mask, attn_drop_rate=0.0)
+        if self.semantic_use:
+            s, semantic_logits = self.semantic_layer(s)
+
         logit = self.node_predictor(s)
 
-        return logit
+        if self.semantic_use:
+            return logit, semantic_logits
+        else:
+            return logit

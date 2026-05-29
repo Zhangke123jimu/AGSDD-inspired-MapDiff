@@ -28,3 +28,4 @@ train:
   batch_size: 1
 
 resume_path: null
+semantic_use: False

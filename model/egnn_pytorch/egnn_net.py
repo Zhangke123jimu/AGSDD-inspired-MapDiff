@@ -5,12 +5,13 @@ import torch_geometric
 from torch.nn import Linear
 from .egnn_pyg import EGNN_Sparse
 from .utils import nodeEncoder, edgeEncoder
+from model.semantic_module import Semantic
 
 
 class EGNN_NET(torch.nn.Module):
     def __init__(self, input_feat_dim, hidden_channels, edge_attr_dim, dropout=0.0, n_layers=1, output_dim=20,
                  embedding=False, embedding_dim=64, mlp_num=2, update_edge=True, update_coors=True, norm_coors=True,
-                 update_global=True, embed_ss=-1, norm_feat=False):
+                 update_global=True, embed_ss=-1, norm_feat=False,semantic_use=False):
         super(EGNN_NET, self).__init__()
         self.dropout = dropout
 
@@ -25,6 +26,12 @@ class EGNN_NET(torch.nn.Module):
         self.embedding = embedding
         self.embed_ss = embed_ss
         self.n_layers = n_layers
+        self.semantic_use = semantic_use
+        if self.semantic_use:
+            if self.embedding:
+                self.semantic_layer = Semantic(embedding_dim)
+            else:
+                self.semantic_layer = Semantic(input_feat_dim)
         if embedding:
             self.time_mlp = nn.Sequential(nn.Linear(1, hidden_channels), nn.SiLU(),
                                           nn.Linear(hidden_channels, embedding_dim))
@@ -115,5 +122,11 @@ class EGNN_NET(torch.nn.Module):
             x = x + ss_embed
 
         x = F.dropout(x, p=self.dropout, training=self.training)
+        if self.semantic_use:
+            x, semantic_logits = self.semantic_layer(x)
         x = self.lin(x)
-        return x
+
+        if self.semantic_use:
+            return x, semantic_logits
+        else:
+            return x

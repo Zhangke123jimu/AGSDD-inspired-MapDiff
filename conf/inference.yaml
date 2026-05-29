@@ -11,3 +11,5 @@ test_model:
 
 comet:
   comet_use: False
+
+semantic_use: False

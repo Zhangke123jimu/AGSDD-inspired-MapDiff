@@ -34,12 +34,14 @@ class Trainer(object):
             num_samples=25,
             ensemble_num=50,
             ddim_steps=50,
+            semantic_adapter=0.5,
             sample_method='ddim',
             experiment=None,
             distributed=False,
             is_main_process=True,
             train_sampler=None,
-            resume_path=None
+            resume_path=None,
+            semantic_use=False
     ):
         super().__init__()
         self.device = device
@@ -89,6 +91,9 @@ class Trainer(object):
         self.train_sampler = train_sampler
         self.rank=dist.get_rank() if self.distributed else 0
         self.world_size=dist.get_world_size() if self.distributed else 1
+
+        self.semantic_use = semantic_use
+        self.semantic_adapter = semantic_adapter
 
         if resume_path is not None:
             try:
@@ -164,8 +169,12 @@ class Trainer(object):
                 self.model.train()
                 g_batch, ipa_batch = next(self.train_iterator)
                 g_batch, ipa_batch = g_batch.to(self.device), ipa_batch.to(self.device) if ipa_batch is not None else None
-                base_loss, mask_loss = self.model(g_batch, ipa_batch)
-                loss = base_loss + mask_loss
+                semantic_loss = 0.0
+                if self.semantic_use:
+                    base_loss, mask_loss, semantic_loss=self.model(g_batch, ipa_batch)
+                else:
+                    base_loss, mask_loss = self.model(g_batch, ipa_batch)
+                loss = base_loss + mask_loss + self.semantic_adapter * semantic_loss
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
 
@@ -185,10 +194,17 @@ class Trainer(object):
                     dist.all_reduce(mask_loss_comb,op=dist.ReduceOp.SUM)
                     mask_loss_comb=mask_loss_comb/self.world_size
 
-                    loss_comb = base_loss_comb + mask_loss_comb
+                    if self.semantic_use:
+                        semantic_loss_comb=semantic_loss.detach().clone()
+                        dist.all_reduce(semantic_loss_comb,op=dist.ReduceOp.SUM)
+                        semantic_loss_comb=semantic_loss_comb/self.world_size
+                        loss_comb = base_loss_comb + mask_loss_comb + self.semantic_adapter * semantic_loss_comb
+                    else:
+                        loss_comb = base_loss_comb + mask_loss_comb
                 else:
                     base_loss_comb = base_loss
                     mask_loss_comb = mask_loss
+                    semantic_loss_comb = semantic_loss
                     loss_comb = loss
 
                 epoch_total_loss += loss_comb.item()
@@ -196,6 +212,8 @@ class Trainer(object):
                 if self.experiment and self.is_main_process:
                     self.experiment.log_metric('train_base_loss', base_loss_comb.item(), step=self.step, epoch=self.epoch)
                     self.experiment.log_metric('train_mask_loss', mask_loss_comb.item(), step=self.step, epoch=self.epoch)
+                    if self.semantic_use:
+                        self.experiment.log_metric('train_semantic_loss',semantic_loss_comb.item(),step=self.step, epoch=self.epoch)
                     self.experiment.log_metric('train_loss', loss_comb.item(), step=self.step, epoch=self.epoch)
 
                 if self.step % self.iter_one_epoch == 0 and self.step != 0:
