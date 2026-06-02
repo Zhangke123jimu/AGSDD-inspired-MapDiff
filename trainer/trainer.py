@@ -77,8 +77,14 @@ class Trainer(object):
         self.epoch = 0
         self.best_val_recovery, self.best_val_perplexity = 0, float('inf')
         self.best_model = None
+        self.semantic_use = semantic_use
+        self.semantic_adapter = semantic_adapter
 
-        self.train_metric_header = ["# Epoch", "# Step", "Train_loss"]
+        if self.semantic_use:
+            self.train_metric_header = ["# Epoch", "# Step", "Base_loss", "Mask_loss","Semantic_loss","Train_loss"]
+        else:
+            self.train_metric_header = ["# Epoch", "# Step", "Base_loss", "Mask_loss","Train_loss"]
+
         self.val_metric_header = ["# Epoch", "# Step", "Recovery", "Perplexity"]
         self.test_metric_header = ["# Epoch", "# Step", "Recovery", "Perplexity"]
         self.train_table = PrettyTable(self.train_metric_header)
@@ -94,9 +100,6 @@ class Trainer(object):
         self.train_sampler = train_sampler
         self.rank=dist.get_rank() if self.distributed else 0
         self.world_size=dist.get_world_size() if self.distributed else 1
-
-        self.semantic_use = semantic_use
-        self.semantic_adapter = semantic_adapter
 
         if resume_path is not None:
             try:
@@ -163,6 +166,10 @@ class Trainer(object):
 
     def train(self):
         epoch_total_loss = 0
+        epoch_total_base_loss = 0
+        epoch_total_mask_loss = 0
+        epoch_total_semantic_loss = 0
+
         with tqdm(initial=self.step, total=self.train_num_steps, disable=not self.is_main_process) as pbar:
 
             while self.epoch < self.config.train.train_epochs:
@@ -211,6 +218,9 @@ class Trainer(object):
                     loss_comb = loss
 
                 epoch_total_loss += loss_comb.item()
+                epoch_total_base_loss += base_loss_comb.item()
+                epoch_total_mask_loss += mask_loss_comb.item()
+                epoch_total_semantic_loss += semantic_loss_comb.item() if self.semantic_use else 0.0
 
                 if self.experiment and self.is_main_process:
                     self.experiment.log_metric('train_base_loss', base_loss_comb.item(), step=self.step, epoch=self.epoch)
@@ -223,12 +233,27 @@ class Trainer(object):
                     self.epoch += 1
 
                     if self.is_main_process:
-                        self.train_table.add_row([self.epoch, self.step, epoch_total_loss / self.iter_one_epoch])
+                        if self.semantic_use:
+                            print(f"epoch: {self.epoch}, base_loss:{epoch_total_base_loss/self.iter_one_epoch}, mask_loss:{epoch_total_mask_loss/self.iter_one_epoch}, "
+                                  f"semantic_loss:{epoch_total_semantic_loss/self.iter_one_epoch}, total train loss:{epoch_total_loss / self.iter_one_epoch}")
+                            self.train_table.add_row([self.epoch, self.step, epoch_total_base_loss/self.iter_one_epoch,
+                                                      epoch_total_mask_loss / self.iter_one_epoch, epoch_total_semantic_loss/self.iter_one_epoch,
+                                                      epoch_total_loss / self.iter_one_epoch])
+                        else:
+                            print(f"epoch: {self.epoch}, base_loss:{epoch_total_base_loss/self.iter_one_epoch}, mask_loss:{epoch_total_mask_loss/self.iter_one_epoch}, "
+                                  f"total train loss:{epoch_total_loss / self.iter_one_epoch}")
+                            self.train_table.add_row([self.epoch, self.step, epoch_total_base_loss/self.iter_one_epoch,
+                                                      epoch_total_mask_loss / self.iter_one_epoch,
+                                                      epoch_total_loss / self.iter_one_epoch])
 
                     if self.epoch != 0 and self.epoch % self.save_checkpoint_every == 0 and self.is_main_process:
                         self.save(self.epoch, self.train_num_steps, mode="last")
 
                     epoch_total_loss = 0
+                    epoch_total_base_loss = 0
+                    epoch_total_mask_loss = 0
+                    epoch_total_semantic_loss = 0
+
                     torch.cuda.empty_cache()
 
                 if self.step != 0 and self.step % (self.save_and_sample_every * self.iter_one_epoch) == 0:

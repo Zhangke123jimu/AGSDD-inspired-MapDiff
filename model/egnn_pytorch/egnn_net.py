@@ -29,9 +29,11 @@ class EGNN_NET(torch.nn.Module):
         self.semantic_use = semantic_use
         if self.semantic_use:
             if self.embedding:
-                self.semantic_layer = Semantic(embedding_dim)
+                self.semantic_dict = nn.Embedding(20, embedding_dim)
+                self.semantic_layers = nn.ModuleList([Semantic(embedding_dim,shared_dict_embedding=self.semantic_dict) for _ in range(n_layers)])
             else:
-                self.semantic_layer = Semantic(input_feat_dim)
+                self.semantic_dict = nn.Embedding(20,input_feat_dim)
+                self.semantic_layers = nn.ModuleList([Semantic(input_feat_dim,shared_dict_embedding=self.semantic_dict) for _ in range(n_layers)])
         if embedding:
             self.time_mlp = nn.Sequential(nn.Linear(1, hidden_channels), nn.SiLU(),
                                           nn.Linear(hidden_channels, embedding_dim))
@@ -93,6 +95,8 @@ class EGNN_NET(torch.nn.Module):
 
         x = torch.cat([pos, x], dim=1)
 
+        semantic_logits_list = []
+
         for i, layer in enumerate(self.mpnn_layes):
 
             if self.embed_ss == -2 and i == self.n_layers - 1:
@@ -101,18 +105,23 @@ class EGNN_NET(torch.nn.Module):
                 x = torch.cat([corr, feats], dim=-1)
 
             if self.update_edge:
-                h, edge_attr = layer(x, edge_index, edge_attr, batch)  # [N,hidden_dim]
+                h, edge_attr = layer(x, edge_index, edge_attr, batch)  # [N, 3 + feature_dim]
             else:
-                h = layer(x, edge_index, edge_attr, batch)  # [N,hidden_dim]
+                h = layer(x, edge_index, edge_attr, batch)  # [N, 3 + feature_dim]
 
             corr, feats = h[:, 0:3], h[:, 3:]
-            time_emb = self.time_mlp_list[i](t)  # [B,hidden_dim*2]
+            time_emb = self.time_mlp_list[i](t)  # [B, feature_dim * 2]
             scale_, shift_ = time_emb.chunk(2, dim=1)
             scale = scale_[data.batch]
             shift = shift_[data.batch]
             feats = feats * (scale + 1) + shift
 
-            feats = self.ff_list[i](feats)
+            feats = self.ff_list[i](feats) # [N, feature_dim]
+
+            # semantic alignment
+            if self.semantic_use:
+                feats, semantic_logits = self.semantic_layers[i](feats)
+                semantic_logits_list.append(semantic_logits)
 
             x = torch.cat([corr, feats], dim=-1)
 
@@ -122,11 +131,9 @@ class EGNN_NET(torch.nn.Module):
             x = x + ss_embed
 
         x = F.dropout(x, p=self.dropout, training=self.training)
-        if self.semantic_use:
-            x, semantic_logits = self.semantic_layer(x)
         x = self.lin(x)
 
         if self.semantic_use:
-            return x, semantic_logits
+            return x, semantic_logits_list
         else:
             return x

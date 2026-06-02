@@ -1,5 +1,5 @@
 import torch
-from torch import nn
+from torch import nn, Tensor
 import math
 import torch.nn.functional as F
 
@@ -7,13 +7,14 @@ class Semantic(nn.Module):
     """
     Semantic Module, referred to AGSDD (Wang, C et al., 2025, https://doi.org/10.1007/978-3-032-06066-2_21.)
     """
-    def __init__(self, c_s:int):
+    def __init__(self, c_s:int, shared_dict_embedding: nn.Embedding):
         """
         c_s: input hidden state channel dimension
         """
         super(Semantic, self).__init__()
         self.c_s = c_s
-        self.kv_embedding = nn.Embedding(20, c_s)
+        self.kv_embedding = shared_dict_embedding
+        assert self.kv_embedding.weight.shape[-1] == c_s
         self.linear_q=nn.Linear(c_s, c_s)
         self.linear_k=nn.Linear(c_s, c_s)
         self.linear_v = nn.Linear(c_s, c_s)

@@ -72,9 +72,14 @@ class EdgePairEncoder(nn.Module):
 
 
 class IPANetModel(nn.Module):
-    def __init__(self, ipa_dim=128, ipa_pairwise_dim=128, ipa_heads=4, ipa_depth=8, ipa_qk_points=4, ipa_v_points=8, dropout_rate=0.1):
+    def __init__(self, ipa_dim=128, ipa_pairwise_dim=128, ipa_heads=4, ipa_depth=8, ipa_qk_points=4, ipa_v_points=8, dropout_rate=0.1, semantic_use=False):
         super(IPANetModel, self).__init__()
         self.ipa_layers = nn.ModuleList([])
+        self.semantic_use = semantic_use
+        if self.semantic_use:
+            self.semantic_dict=nn.Embedding(20,ipa_dim)
+            self.semantic_layers = nn.ModuleList([Semantic(ipa_dim,shared_dict_embedding=self.semantic_dict) for _ in range(ipa_depth)])
+
         for i in range(ipa_depth):
             ipa = InvariantPointAttention(ipa_dim, ipa_pairwise_dim, ipa_dim // ipa_heads, ipa_heads, ipa_qk_points,
                                           ipa_v_points)
@@ -91,7 +96,8 @@ class IPANetModel(nn.Module):
                                                   post_transit, edge_transition]))
 
     def forward(self, s, z, r, seq_mask, attn_drop_rate):
-        for ipa, ipa_dropout, layer_norm_ipa, *transit_layers, edge_transition in self.ipa_layers:
+        semantic_logits_list = []
+        for i, (ipa, ipa_dropout, layer_norm_ipa, *transit_layers, edge_transition) in enumerate(self.ipa_layers):
             s = s + ipa(s, z, r, seq_mask, attn_drop_rate=attn_drop_rate)
             s = ipa_dropout(s)
             s = layer_norm_ipa(s)
@@ -103,10 +109,17 @@ class IPANetModel(nn.Module):
             s = transition(s)
             s = post_transit(s)
 
+            if self.semantic_use:
+                s, semantic_logits=self.semantic_layers[i](s)
+                semantic_logits_list.append(semantic_logits)
+
             if edge_transition is not None:
                 z = edge_transition(s, z)
                 # z = checkpoint(edge_transition, s, z)
-        return s
+        if self.semantic_use:
+            return s, semantic_logits_list
+        else:
+            return s
 
 
 class IPANetPredictor(nn.Module):
@@ -119,10 +132,8 @@ class IPANetPredictor(nn.Module):
         self.z_dropout = nn.Dropout(dropout)
         self.node_predictor = nn.Linear(hidden_dim, 20)
 
-        self.ipa = IPANetModel(ipa_dim, ipa_pairwise_dim, ipa_heads, ipa_depth, ipa_qk_points, ipa_v_points, dropout)
         self.semantic_use = semantic_use
-        if self.semantic_use:
-            self.semantic_layer = Semantic(hidden_dim)
+        self.ipa = IPANetModel(ipa_dim, ipa_pairwise_dim, ipa_heads, ipa_depth, ipa_qk_points, ipa_v_points, dropout, semantic_use=self.semantic_use)
 
     def forward(self, x_aa, x_pos, x_aa_mask, seq_mask):
         r = Rigid.from_3_points(x_pos[:, :, 0], x_pos[:, :, 1], x_pos[:, :, 2])
@@ -132,13 +143,14 @@ class IPANetPredictor(nn.Module):
         z = self.z_dropout(z)
         seq_mask = seq_mask.long()
 
-        s = self.ipa(s, z, r, seq_mask, attn_drop_rate=0.0)
         if self.semantic_use:
-            s, semantic_logits = self.semantic_layer(s)
+            s, semantic_logits_list = self.ipa(s, z, r, seq_mask, attn_drop_rate=0.0)
+        else:
+            s = self.ipa(s, z, r, seq_mask, attn_drop_rate=0.0)
 
         logit = self.node_predictor(s)
 
         if self.semantic_use:
-            return logit, semantic_logits
+            return logit, semantic_logits_list
         else:
             return logit

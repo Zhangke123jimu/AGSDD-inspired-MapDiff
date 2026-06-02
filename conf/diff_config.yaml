@@ -29,4 +29,6 @@ train:
   save_checkpoint_every: 3
 
 resume_path: null
-semantic_use: False
+semantic:
+  semantic_use: False
+  semantic_adapter: 0.5

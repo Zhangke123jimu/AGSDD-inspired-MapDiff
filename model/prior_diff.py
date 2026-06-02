@@ -270,7 +270,7 @@ class Prior_Diff(nn.Module):
             raise ValueError(f'unknown objective {self.objective}')
 
         if self.semantic_use:
-            base_logits,semantic_logits_e = self.model(noise_data, t_int)
+            base_logits,semantic_logits_list_e = self.model(noise_data, t_int)
         else:
             base_logits = self.model(noise_data, t_int)
         log_probs = F.log_softmax(base_logits, dim=-1)
@@ -290,15 +290,23 @@ class Prior_Diff(nn.Module):
         ipa_data.x[ipa_data.x_pad == 1] = base_pred_x
 
         if self.semantic_use:
-            prior_logits,semantic_logits_i = self.prior_model(ipa_data.x, ipa_data.atom_pos, ipa_data.x_mask, ipa_data.x_pad)
+            prior_logits,semantic_logits_list_i = self.prior_model(ipa_data.x, ipa_data.atom_pos, ipa_data.x_mask, ipa_data.x_pad)
         else:
             prior_logits = self.prior_model(ipa_data.x, ipa_data.atom_pos, ipa_data.x_mask, ipa_data.x_pad)
         base_loss = self.loss_fn(base_logits, target, reduction='mean')
         mask_loss = self.loss_fn(prior_logits[ipa_data.x_mask == 1], ipa_data.label[ipa_data.x_mask == 1], reduction='mean')
 
         if self.semantic_use:
-            semantic_loss_e=self.loss_fn(semantic_logits_e, target, reduction='mean')
-            semantic_loss_i=self.loss_fn(semantic_logits_i[ipa_data.x_mask==1], ipa_data.label[ipa_data.x_mask == 1], reduction='mean')
+            semantic_loss_e = 0.0
+            semantic_loss_i = 0.0
+            for i in range(len(semantic_logits_list_e)):
+                semantic_loss_e += self.loss_fn(semantic_logits_list_e[i], target, reduction='mean')
+            for i in range(len(semantic_logits_list_i)):
+                semantic_loss_i += self.loss_fn(semantic_logits_list_i[i][ipa_data.x_mask == 1], ipa_data.label[ipa_data.x_mask == 1], reduction='mean')
+
+            semantic_loss_e /= len(semantic_logits_list_e)
+            semantic_loss_i /= len(semantic_logits_list_i)
+
             semantic_loss = semantic_loss_e + semantic_loss_i
             return base_loss, mask_loss, semantic_loss
         else:
