@@ -12,4 +12,6 @@ test_model:
 comet:
   comet_use: False
 
-semantic_use: False
+semantic:
+  semantic_use_EGNN: False
+  semantic_use_IPA: True

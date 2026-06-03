@@ -103,9 +103,9 @@ def main(cfg: DictConfig):
                      norm_coors=cfg.model.norm_coors, update_coors=cfg.model.update_coors,
                      update_global=cfg.model.update_global, embedding=cfg.model.embedding,
                      embedding_dim=cfg.model.embedding_dim, norm_feat=cfg.model.norm_feat, embed_ss=cfg.model.embed_ss,
-                     semantic_use=cfg.semantic.semantic_use)
+                     semantic_use=cfg.semantic.semantic_use_EGNN)
 
-    prior_model = IPANetPredictor(dropout=cfg.model.ipa_drop_out, semantic_use=cfg.semantic.semantic_use)
+    prior_model = IPANetPredictor(dropout=cfg.model.ipa_drop_out, semantic_use=cfg.semantic.semantic_use_IPA)
     prior_checkpoint = torch.load(cfg.prior_model.path,map_location=device)
     prior_model.load_state_dict(prior_checkpoint['model'], strict=False)
 
@@ -116,7 +116,10 @@ def main(cfg: DictConfig):
                                  dev_mask_ratio=cfg.mask_prior.dev_mask_ratio,
                                  marginal_dist_path=cfg.dataset.marginal_train_dir,
                                  ensemble_num=cfg.diffusion.ensemble_num,
-                                 semantic_use=cfg.semantic.semantic_use).to(device)
+                                 ).to(device)
+
+    semantic_use = cfg.semantic.semantic_use_EGNN or cfg.semantic.semantic_use_IPA
+
     if is_main_process:
         print(f"Total parameters: {count_parameters(diffusion_model)}")
 
@@ -169,7 +172,7 @@ def main(cfg: DictConfig):
                       is_main_process=is_main_process,
                       train_sampler=train_sampler,
                       resume_path=cfg.resume_path,
-                      semantic_use=cfg.semantic.semantic_use,
+                      semantic_use=semantic_use,
                       semantic_adapter=cfg.semantic.semantic_adapter)
     trainer.train()
 

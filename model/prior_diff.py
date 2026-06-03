@@ -9,7 +9,7 @@ from model.diffusion import DiscreteUniformTransition, BlosumTransition, Discret
 class Prior_Diff(nn.Module):
     def __init__(self, model, prior_model, timesteps=500, loss_type='CE', objective='pred_x0', noise_type='marginal',
                  sample_method='ddim', min_mask_ratio=0.4, dev_mask_ratio=0.1, ensemble_num=50,
-                 marginal_dist_path='data/train_magrinal_x.pt',semantic_use=False):
+                 marginal_dist_path='data/train_magrinal_x.pt'):
         super().__init__()
         self.model = model
         self.prior_model = prior_model
@@ -21,7 +21,6 @@ class Prior_Diff(nn.Module):
         self.min_mask_ratio = min_mask_ratio
         self.dev_mask_ratio = dev_mask_ratio
         self.ensemble_num = ensemble_num
-        self.semantic_use = semantic_use
         if noise_type == 'uniform':
             self.transition_model = DiscreteUniformTransition(x_classes=20)
         elif noise_type == 'blosum':
@@ -88,7 +87,7 @@ class Prior_Diff(nn.Module):
         noise_data = data.clone()
         noise_data.x = noise_X  # x_t
         t = t_int * torch.ones(size=(data.batch[-1] + 1, 1), device=data.x.device).float()
-        if self.semantic_use:
+        if self.model.semantic_use:
             pred,_ = self.model(noise_data, t)
         else:
             pred = self.model(noise_data, t)
@@ -269,7 +268,7 @@ class Prior_Diff(nn.Module):
         else:
             raise ValueError(f'unknown objective {self.objective}')
 
-        if self.semantic_use:
+        if self.model.semantic_use:
             base_logits,semantic_logits_list_e = self.model(noise_data, t_int)
         else:
             base_logits = self.model(noise_data, t_int)
@@ -289,14 +288,14 @@ class Prior_Diff(nn.Module):
         ipa_data.x_mask[ipa_data.x_pad == 1] = mask_entropy.long()
         ipa_data.x[ipa_data.x_pad == 1] = base_pred_x
 
-        if self.semantic_use:
+        if self.prior_model.semantic_use:
             prior_logits,semantic_logits_list_i = self.prior_model(ipa_data.x, ipa_data.atom_pos, ipa_data.x_mask, ipa_data.x_pad)
         else:
             prior_logits = self.prior_model(ipa_data.x, ipa_data.atom_pos, ipa_data.x_mask, ipa_data.x_pad)
         base_loss = self.loss_fn(base_logits, target, reduction='mean')
         mask_loss = self.loss_fn(prior_logits[ipa_data.x_mask == 1], ipa_data.label[ipa_data.x_mask == 1], reduction='mean')
 
-        if self.semantic_use:
+        if self.prior_model.semantic_use and self.model.semantic_use:
             semantic_loss_e = 0.0
             semantic_loss_i = 0.0
             for i in range(len(semantic_logits_list_e)):
@@ -309,5 +308,15 @@ class Prior_Diff(nn.Module):
 
             semantic_loss = semantic_loss_e + semantic_loss_i
             return base_loss, mask_loss, semantic_loss
+        elif self.prior_model.semantic_use and not self.model.semantic_use:
+            semantic_loss_i = 0.0
+            for i in range(len(semantic_logits_list_i)):
+                semantic_loss_i += self.loss_fn(semantic_logits_list_i[i][ipa_data.x_mask == 1], ipa_data.label[ipa_data.x_mask == 1], reduction='mean')
+
+            semantic_loss_i /= len(semantic_logits_list_i)
+            semantic_loss = semantic_loss_i
+            return base_loss, mask_loss, semantic_loss
+        elif self.model.semantic_use and not self.prior_model.semantic_use:
+            raise NotImplementedError
         else:
             return base_loss, mask_loss
