@@ -10,4 +10,4 @@ data/*
 !data/source/
 cath/
 cath_download/
-
+auto_save_shutdown.sh
