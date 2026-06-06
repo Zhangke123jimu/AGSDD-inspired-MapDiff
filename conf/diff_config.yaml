@@ -30,6 +30,6 @@ train:
 
 resume_path: null
 semantic:
-  semantic_use_EGNN: False
+  semantic_use_EGNN: True
   semantic_use_IPA: True
   semantic_adapter: 0.5
