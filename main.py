@@ -187,8 +187,6 @@ def main(cfg: DictConfig):
         dist.barrier()
         dist.destroy_process_group()
 
-    if is_main_process:
-        os.system("bash auto_save_shutdown.sh")
 
 if __name__ == "__main__":
     main()
