@@ -3,34 +3,16 @@
 <!-- <div align="center"> -->
 <a href="https://pytorch.org/get-started/locally/"><img alt="PyTorch" src="https://img.shields.io/badge/PyTorch-ee4c2c?logo=pytorch&logoColor=white"></a>
 <a href="https://hydra.cc/"><img alt="Config: Hydra" src="https://img.shields.io/badge/Config-Hydra-89b8cd"></a>
+<a href="10.21203/rs.3.rs-10307155/v1"><img alt='Preprint DOI' src="https://img.shields.io/badge/Preprint-DOI-blue"></a>
 [![GitHub license](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/peizhenbai/MapDiff/blob/main/LICENSE)
 
 <!-- </div> -->
-## Overview
-This repository provides a PyTorch implementation of the AGSDD-inspired-MapDiff. [MapDiff](https://github.com/peizhenbai/MapDiff/) (**Ma**sk-**p**rior-guided denoising **Diff**usion) is a deep diffusion model with mask-prior-guided denoising to improve the inverse protein folding task. 
-It works on 3D protein backbone structures to iteratively predict the feasible 1D sequences of amino acids. [AGSDD](https://doi.org/10.1007/978-3-032-06066-2_21) suggests that can improve model performance by aligning hidden representations with amino-acid type semantics. This idea is compatible with MapDiff because both methods rely on message passing and iterative denoising.
-Inspired by that, as an exploratory experiment, this repository modifies the MapDiff's architecture to embed semantic module of AGSDD. In addition, the repository 
-fixes several issues in the backbone dihedral feature calculation of MapDiff implementation. Together, these changes lead to modest improvements in recovery and perplexity, with additional diagnostic analyses provided in the technical report. 
+## Introduction
+This repository provides a PyTorch implementation of the AGSDD-inspired-MapDiff. [AGSDD](https://doi.org/10.1007/978-3-032-06066-2_21) suggested semantic alignment (SA) as a way to incorporate amino-acid-level semantic information into diffusion-based inverse folding. 
+Inspired by SA, this repository examines the transferability of AGSDD-inspired SA to MapDiff as a case study. AGSDD-inspired-MapDiff is built on top of a dihedral-standardized [MapDiff](https://github.com/peizhenbai/MapDiff/) baseline, where the backbone dihedral feature calculation was standardized before adding semantic modules.
 
-Below is a summary table: 
-
-|            Version (CATH 4.2)            | Model Parameters | Median Recovery Rate (%) | Perplexity |
-|:----------------------------------------:|:----------------:|:------------------------:|:----------:|
-| Reported MapDiff result (marginal prior) |      14.7M       |          60.93           |    3.43    |
-|          Original reproduction           |      14.7M       |          60.97           |    3.54    |
-|             Dihedral-fixed*              |      14.7M       |          61.23           |    3.54    |
-|  Semantic-alignment & Dihedral-fixed**   |      16.3M       |          61.41           |    3.41    |
-
-*Dihedral-fixed: See [Technical Report-Appendix](technical_report.md#Appendix) for details. \
-**Semantic-alignment & Dihedral-fixed: See [Technical Report](technical_report.md) for details.
- 
-
-This repository also includes several engineering improvements, including DDP-based distributed training, batch downloading and graph construction, and checkpoint resumption.
-
-Hardware note: The original MapDiff experiments were reported on A100 GPUs. The model is trained in FP32 both in original and this repository, so mixed-precision acceleration is not fully used. To keep the reported results comparable, all main-model training runs were performed on 2 x A100 GPUs. 
-For exploratory experiments, rented consumer GPUs with sufficient VRAM may be a practical lower-cost alternative and can be competitive in wall-clock time for FP32 training, although this depends on the specific hardware。
 ## Framework
-![MapDiff](image/AGSDD-inspired-MapDiff.png)
+![MapDiff](image/AGSDD-inspired-MapDiff.svg)
 
 ## Local Environment Setup
 AGSDD-inspired-MapDiff can be used on Linux, Windows and MacOS (OSX) with enough RAM. We recommend the environment setup via conda package manager. 
@@ -121,12 +103,12 @@ The model checkpoint for Dihedral-fixed version can also be downloaded [here](ht
 ## Citation
 If you find that this work is useful for your research, please consider give a star ⭐ and citation:
 ```
-@software{zhang_agsdd_inspired_mapdiff_2026,
-  author = {Zhang, Ke},
-  title = {A geometry-corrected, AGSDD-inspired extension of Mapdiff},
-  year = {2026},
-  url = {https://github.com/Zhangke123jimu/AGSDD-inspired-MapDiff},
-  note = {GitHub repository. Accessed 2026-06-01}
+@article{zhang2026semantic,
+  title={Investigating the Effect and Mechanism of Semantic Alignment in Fixed-Backbone Protein Sequence Design},
+  author={Zhang, Ke},
+  journal={Research Square},
+  year={2026},
+  doi={10.21203/rs.3.rs-10307155/v1}
 }
 ```
 
